@@ -1,0 +1,13 @@
+name: kk-test
+
+on:
+  workflow_dispatch:
+    
+jobs:
+  kk-integrations:
+    needs: create-draft
+    secrets: inherit
+    uses: ./.github/workflows/_integration-tests.yaml
+    with:
+      image: europe-docker.pkg.dev/kyma-project/prod/dockerregistry-operator:0.4.0
+      trigger_btp: true
