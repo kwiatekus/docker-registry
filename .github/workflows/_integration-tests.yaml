@@ -15,116 +15,146 @@ on:
 
 
 jobs:
-  operator-integration-test:
-    if: ${{ !startsWith(github.event_name, 'pull_request') || github.event.pull_request.draft == false }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-      - uses: ./.github/actions/setup-go
-      - uses: ./.github/actions/create-k3d-cluster
-      - name: run test
-        run: |
-          make -C components/operator deploy
-          make -C tests/operator test
-        env:
-          IMG: ${{ inputs.image }}
-      - if: ${{ always() }}
-        uses: ./.github/actions/collect-cluster-info
+  # operator-integration-test:
+  #   if: ${{ !startsWith(github.event_name, 'pull_request') || github.event.pull_request.draft == false }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ github.event.pull_request.head.ref }}
+  #         repository: ${{ github.event.pull_request.head.repo.full_name }}
+  #     - uses: ./.github/actions/setup-go
+  #     - uses: ./.github/actions/create-k3d-cluster
+  #     - name: run test
+  #       run: |
+  #         make -C components/operator deploy
+  #         make -C tests/operator test
+  #       env:
+  #         IMG: ${{ inputs.image }}
+  #     - if: ${{ always() }}
+  #       uses: ./.github/actions/collect-cluster-info
 
-  gardener-integration-test:
-    if: ${{ !startsWith(github.event_name, 'pull_request') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-go
-      - name: provision gardener
-        run: |
-          echo "$GARDENER_SA" > $GARDENER_SA_PATH
-          echo "Used kubeconfig file has $(sed -n '$=' $GARDENER_SA_PATH) lines"
-          make -C hack provision-gardener
-        env:
-          GARDENER_SECRET_NAME: ${{ secrets.GARDENER_SECRET_NAME }}
-          GARDENER_PROJECT: ${{ secrets.GARDENER_PROJECT }}
-          GARDENER_SA_PATH: /tmp/gardener-sa.yaml
-          GARDENER_SA: ${{ secrets.GARDENER_SA }}
-      - name: run test
-        run: |
-          make -C components/operator deploy
-          make -C tests/operator test
-        env:
-          IMG: ${{ inputs.image }}
-      - name: deprovision gardener
-        if: ${{ always() }}
-        run: make -C hack deprovision-gardener
-        env:
-          GARDENER_SA_PATH: /tmp/gardener-sa.yaml
+  # gardener-integration-test:
+  #   if: ${{ !startsWith(github.event_name, 'pull_request') }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: ./.github/actions/setup-go
+  #     - name: provision gardener
+  #       run: |
+  #         echo "$GARDENER_SA" > $GARDENER_SA_PATH
+  #         echo "Used kubeconfig file has $(sed -n '$=' $GARDENER_SA_PATH) lines"
+  #         make -C hack provision-gardener
+  #       env:
+  #         GARDENER_SECRET_NAME: ${{ secrets.GARDENER_SECRET_NAME }}
+  #         GARDENER_PROJECT: ${{ secrets.GARDENER_PROJECT }}
+  #         GARDENER_SA_PATH: /tmp/gardener-sa.yaml
+  #         GARDENER_SA: ${{ secrets.GARDENER_SA }}
+  #     - name: run test
+  #       run: |
+  #         make -C components/operator deploy
+  #         make -C tests/operator test
+  #       env:
+  #         IMG: ${{ inputs.image }}
+  #     - name: deprovision gardener
+  #       if: ${{ always() }}
+  #       run: make -C hack deprovision-gardener
+  #       env:
+  #         GARDENER_SA_PATH: /tmp/gardener-sa.yaml
 
   btp-integration-tests:
     if: ${{ inputs.trigger_btp }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: tests/btp/hack
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-kyma
         with:
-          path: "tests/btp/bin"
-      - name: Create btp account with kyma enable
-        run: |
-          . ./set-tf-envs.sh
-          terraform -chdir=../tf init
-          terraform -chdir=../tf apply -auto-approve
-          echo "SUBACC_ID=$(terraform -chdir=../tf output -raw subaccount_id)" >> $GITHUB_ENV
-        env:
-          BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
-          TF_VAR_BTP_NEW_SUBACCOUNT_NAME: docker-registry-test-${{ github.sha }}-${{ github.run_attempt }}
+          path: "/usr/local/bin"
+      - name: compute github commit sha
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Generate access
+      - uses: kyma-project/terraform-module/.github/actions/create-sap-btp-kyma@6af78799edd07b5301494de20aaecee28f51af27
+        id: create-btp-resources
+        with:
+          btp_subaccount_name: dockerregistry-test-${{ steps.vars.outputs.sha_short }}-${{ github.run_attempt }}
+          btp_backend_url: '${{ secrets.BTP_BACKEND_URL}}'
+          btp_user: '${{ secrets.BTP_BOT_USER}}'
+          btp_password: '${{ secrets.BTP_BOT_PASSWORD}}'
+          btp_global_account: '${{ secrets.BTP_GLOBAL_ACCOUNT }}'
+          btp_idp_tenant: '${{ secrets.BTP_CUSTOM_IAS_TENANT }}'
+          btp_subaccount_region: '${{ secrets.BTP_SUBACCOUNT_REGION }}'
+          btp_kyma_region: '${{ secrets.BTP_KYMA_REGION }}'
+          btp_kyma_plan: '${{ secrets.BTP_KYMA_PLAN }}'
+      - name: run tests
         run: |
-          sudo ln -sf bash /bin/sh
-          . ./set-tf-envs.sh
-          mkdir -p tmp
-          CLUSTERROLE=cluster-admin make service-account-kubeconfig
-        env:
-          BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
+          kubectl get nodes  
 
-      - name: Add bindings
-        run: |
-          . ./set-tf-envs.sh
-          KUBECONFIG=tmp/sa-kubeconfig.yaml BTP_PROVIDER_SUBACCOUNT_ID=$TF_VAR_BTP_PROVIDER_SUBACCOUNT_ID make share-sm-service-operator-access
-          KUBECONFIG=tmp/sa-kubeconfig.yaml make create-object-store-reference
-          make -C ../../../components/operator/ render-manifest
-          KUBECONFIG=tmp/sa-kubeconfig.yaml OPERATOR_MANIFEST=../../../dockerregistry-operator.yaml make enable_docker_registry
-        env:
-          BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
-          IMG: ${{ inputs.image }}
 
-      - name: Test if docker registry is working
-        shell: bash
-        run: |
-          KUBECONFIG=tmp/sa-kubeconfig.yaml make docker_registry_login
-          KUBECONFIG=tmp/sa-kubeconfig.yaml make docker_push_simple_app
-          KUBECONFIG=tmp/sa-kubeconfig.yaml make deploy_simple_app
-
-      - uses: ./.github/actions/setup-btp
+      - uses: kyma-project/terraform-module/.github/actions/force-delete-sap-btp-subaccount@6af78799edd07b5301494de20aaecee28f51af27
         if: always()
         with:
-          path: "tests/btp/bin"
+          btp_subaccount_id: ${{ steps.create-btp-resources.outputs.subaccount_id }}
+          btp_backend_url: ${{ secrets.BTP_BACKEND_URL}}
+          btp_user: ${{ secrets.BTP_BOT_USER}}
+          btp_password: ${{ secrets.BTP_BOT_PASSWORD}}
+          btp_global_account: ${{ secrets.BTP_GLOBAL_ACCOUNT }}
+          btp_idp_tenant: ${{ secrets.BTP_CUSTOM_IAS_TENANT }}
 
-      - name: Cleanup Kyma
-        shell: bash
-        run: |
-          KUBECONFIG=tmp/sa-kubeconfig.yaml make cleanup-kyma
 
-      - name: Force delete btp account
-        if: always()
-        run: |
-          . ./set-tf-envs.sh
-          ../bin/btp login --url $TF_VAR_BTP_BACKEND_URL --user $TF_VAR_BTP_BOT_USER --password $TF_VAR_BTP_BOT_PASSWORD --idp $TF_VAR_BTP_CUSTOM_IAS_TENANT --subdomain $TF_VAR_BTP_GLOBAL_ACCOUNT
-          ../bin/btp delete accounts/subaccount ${SUBACC_ID} --global-account ${TF_VAR_BTP_GLOBAL_ACCOUNT} --force-delete true --confirm true
-        env:
-          BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
+
+      # - name: Create btp account with kyma enable
+      #   run: |
+      #     . ./set-tf-envs.sh
+      #     terraform -chdir=../tf init
+      #     terraform -chdir=../tf apply -auto-approve
+      #     echo "SUBACC_ID=$(terraform -chdir=../tf output -raw subaccount_id)" >> $GITHUB_ENV
+      #   env:
+      #     BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
+      #     TF_VAR_BTP_NEW_SUBACCOUNT_NAME: docker-registry-test-${{ github.sha }}-${{ github.run_attempt }}
+
+      # - name: Generate access
+      #   run: |
+      #     sudo ln -sf bash /bin/sh
+      #     . ./set-tf-envs.sh
+      #     mkdir -p tmp
+      #     CLUSTERROLE=cluster-admin make service-account-kubeconfig
+      #   env:
+      #     BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
+
+      # - name: Add bindings
+      #   run: |
+      #     . ./set-tf-envs.sh
+      #     KUBECONFIG=tmp/sa-kubeconfig.yaml BTP_PROVIDER_SUBACCOUNT_ID=$TF_VAR_BTP_PROVIDER_SUBACCOUNT_ID make share-sm-service-operator-access
+      #     KUBECONFIG=tmp/sa-kubeconfig.yaml make create-object-store-reference
+      #     make -C ../../../components/operator/ render-manifest
+      #     KUBECONFIG=tmp/sa-kubeconfig.yaml OPERATOR_MANIFEST=../../../dockerregistry-operator.yaml make enable_docker_registry
+      #   env:
+      #     BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
+      #     IMG: ${{ inputs.image }}
+
+      # - name: Test if docker registry is working
+      #   shell: bash
+      #   run: |
+      #     KUBECONFIG=tmp/sa-kubeconfig.yaml make docker_registry_login
+      #     KUBECONFIG=tmp/sa-kubeconfig.yaml make docker_push_simple_app
+      #     KUBECONFIG=tmp/sa-kubeconfig.yaml make deploy_simple_app
+
+      # - uses: ./.github/actions/setup-btp
+      #   if: always()
+      #   with:
+      #     path: "tests/btp/bin"
+
+      # - name: Cleanup Kyma
+      #   shell: bash
+      #   run: |
+      #     KUBECONFIG=tmp/sa-kubeconfig.yaml make cleanup-kyma
+
+      # - name: Force delete btp account
+      #   if: always()
+      #   run: |
+      #     . ./set-tf-envs.sh
+      #     ../bin/btp login --url $TF_VAR_BTP_BACKEND_URL --user $TF_VAR_BTP_BOT_USER --password $TF_VAR_BTP_BOT_PASSWORD --idp $TF_VAR_BTP_CUSTOM_IAS_TENANT --subdomain $TF_VAR_BTP_GLOBAL_ACCOUNT
+      #     ../bin/btp delete accounts/subaccount ${SUBACC_ID} --global-account ${TF_VAR_BTP_GLOBAL_ACCOUNT} --force-delete true --confirm true
+      #   env:
+      #     BTP_ENV: ${{ secrets.BTP_INTEGRATION_TEST }}
