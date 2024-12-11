@@ -99,10 +99,13 @@ jobs:
           btp_subaccount_region: '${{ secrets.BTP_SUBACCOUNT_REGION }}'
           btp_kyma_region: '${{ secrets.BTP_KYMA_REGION }}'
           btp_kyma_plan: '${{ secrets.BTP_KYMA_PLAN }}'
-      - name: run tests
+      - name: ensure object store backend storage
         run: |
-          kubectl get nodes  
-
+          echo "$BTP_REMOTE_SERVICE_MANAGER_BINDING" > provider-sm-decoded.env
+          cat provider-sm-decoded.env
+          kubectl create secret generic sm-provider-access --namespace kyma-system --from-env-file provider-sm-decoded.env
+        env:
+          BTP_REMOTE_SERVICE_MANAGER_BINDING: ${{ secrets.BTP_REMOTE_SERVICE_MANAGER_BINDING }}
 
       - uses: kyma-project/terraform-module/.github/actions/force-delete-sap-btp-subaccount@f67d4c5fbc5184ae75896ceb64db5842fdf70424
         if: always()
